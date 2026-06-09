@@ -41,6 +41,21 @@ class MinimalMergeTests(unittest.TestCase):
         self.assertNotIn("raw.githubusercontent.com/Pretic/Pre-cfy", text)
         self.assertNotIn("curl -Ls https://raw.githubusercontent.com/Pretic/Pre-cfy", text)
 
+    def test_cloudflare_optimizer_has_stable_quality_controls(self):
+        text = script_text()
+
+        self.assertIn("sb_cfy_select_wetest_category()", text)
+        self.assertIn("sb_cfy_match_isp_category()", text)
+        self.assertIn("sb_cfy_select_generate_count()", text)
+        self.assertIn("sb_cfy_load_imported_edges()", text)
+        self.assertIn("导入本地测速结果", text)
+        self.assertIn("默认20", text)
+
+    def test_local_speedtest_helpers_and_ci_are_present(self):
+        self.assertTrue((ROOT / "tools" / "cfst-local.sh").exists())
+        self.assertTrue((ROOT / "tools" / "cfst-local.ps1").exists())
+        self.assertTrue((ROOT / ".github" / "workflows" / "ci.yml").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -31,12 +31,54 @@ Telegram交流反馈群组：https://t.me/eooceu
 * `cloudflared` quick tunnel 与固定隧道配置统一使用 `${ARGO_PORT}`，避免端口变量和实际转发端口不一致。
 * 默认订阅不输出 HY2/TUIC 等 UDP 系节点；如需输出，可设置 `INCLUDE_UDP_LINKS=1`。
 * 菜单第 `11` 项内嵌 Cloudflare 优选节点生成器，优先读取 `/etc/sing-box/url.txt` 中的 `vless-ws-tls-argo` 模板，生成结果保存到 `/etc/sing-box/cfy.txt`，可选择去重追加到当前订阅并刷新 `/etc/sing-box/sub.txt`。
+* Cloudflare 优选支持官方 IP、云优选线路筛选、电信/联通/移动/全部、导入本地测速结果；默认生成前 `20` 个，输入 `0` 才生成全部。
 
 自用一键命令：
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/Pretic/SB-cfy-Pre/main/sing-box.sh)
 ```
+
+## Cloudflare 优选与本地测速
+
+第 `11. Cloudflare优选` 提供三个来源：
+
+1. `Cloudflare 官方 (手动优选)`：从 Cloudflare 官方 IPv4 段随机生成，适合作为兜底。
+2. `云优选`：从 wetest 列表读取，可筛选电信、联通、移动或全部线路。
+3. `导入本地测速结果`：推荐用于追求质量。测速应在你实际使用代理的电脑和网络上运行，而不是在 VPS 上运行。
+
+本地测速辅助脚本只做三件事：从 [XIU2/CloudflareSpeedTest](https://github.com/XIU2/CloudflareSpeedTest) 官方 release 下载 `cfst` 到当前目录的 `cfst-local` 文件夹，运行测速，生成 `result.csv`。它不需要管理员权限，不使用 `sudo`，不改系统服务，不读取密钥。
+
+Linux/macOS：
+
+```bash
+mkdir -p cfst-test && cd cfst-test
+curl -LO https://raw.githubusercontent.com/Pretic/SB-cfy-Pre/main/tools/cfst-local.sh
+bash cfst-local.sh
+```
+
+Windows PowerShell：
+
+```powershell
+mkdir cfst-test
+cd cfst-test
+iwr -UseBasicParsing https://raw.githubusercontent.com/Pretic/SB-cfy-Pre/main/tools/cfst-local.ps1 -OutFile cfst-local.ps1
+powershell -ExecutionPolicy Bypass -File .\cfst-local.ps1
+```
+
+默认参数是 `-tl 200 -dn 20 -o result.csv`。如果要自定义 CFST 参数，可以直接追加，例如：
+
+```bash
+bash cfst-local.sh -tll 40 -tl 180 -dn 30 -o result.csv
+```
+
+测速完成后，把 `result.csv` 上传到 VPS：
+
+```bash
+scp result.csv root@你的VPSIP:/root/result.csv
+```
+
+然后在 VPS 上运行 `sb`，进入第 `11. Cloudflare优选`，选择 `3) 导入本地测速结果`，输入 `/root/result.csv`。
 
 
 # 1：vps一键命令，已集成到ssh工具箱中

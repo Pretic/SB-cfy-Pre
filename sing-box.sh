@@ -2419,10 +2419,101 @@ sb_cfy_select_templates() {
     done < "$client_dir"
 }
 
+sb_cfy_match_isp_category() {
+    local isp="$1" category="${2:-all}"
+    case "$category" in
+        all|"") return 0 ;;
+        telecom) echo "$isp" | grep -Eqi '电信|telecom|china[ _-]*telecom|ctcc' ;;
+        unicom)  echo "$isp" | grep -Eqi '联通|unicom|china[ _-]*unicom|cuc' ;;
+        mobile)  echo "$isp" | grep -Eqi '移动|mobile|china[ _-]*mobile|cmcc|cmi' ;;
+        *) return 0 ;;
+    esac
+}
+
+sb_cfy_select_wetest_category() {
+    local category_choice
+    yellow "请选择云优选线路:"
+    echo "  1) 电信"
+    echo "  2) 联通"
+    echo "  3) 移动"
+    echo "  4) 全部 (默认)"
+    while true; do
+        reading "请输入选项编号 (1-4, 回车默认4): " category_choice
+        case "$category_choice" in
+            1) SB_CFY_WETEST_CATEGORY="telecom"; return ;;
+            2) SB_CFY_WETEST_CATEGORY="unicom"; return ;;
+            3) SB_CFY_WETEST_CATEGORY="mobile"; return ;;
+            ""|4) SB_CFY_WETEST_CATEGORY="all"; return ;;
+            *) red "无效的输入，请重试。" ;;
+        esac
+    done
+}
+
+sb_cfy_select_generate_count() {
+    local total="$1" default_count="${2:-20}" choice
+
+    if ! [[ "$total" =~ ^[0-9]+$ ]] || [ "$total" -le 0 ]; then
+        echo 0
+        return
+    fi
+    if [ "$default_count" -gt "$total" ]; then
+        default_count="$total"
+    fi
+
+    while true; do
+        reading "请输入生成数量 (1-${total}, 回车默认${default_count}, 常规默认20, 0=全部): " choice
+        case "$choice" in
+            "") echo "$default_count"; return ;;
+            0) echo "$total"; return ;;
+            *)
+                if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$total" ]; then
+                    echo "$choice"
+                    return
+                fi
+                red "请输入 0-${total} 范围内的数字。" >&2
+                ;;
+        esac
+    done
+}
+
+sb_cfy_is_edge_ip() {
+    local candidate="$1"
+    [[ "$candidate" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && return 0
+    [[ "$candidate" =~ ^\[?[0-9A-Fa-f:]+\]?$ ]] && [[ "$candidate" == *:* ]] && return 0
+    return 1
+}
+
+sb_cfy_load_imported_edges() {
+    local source_file="$1" line candidate
+    sb_cfy_ip_list=()
+    sb_cfy_isp_list=()
+
+    [ -f "$source_file" ] || { red "文件不存在: ${source_file}"; return 1; }
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line//$'\r'/}"
+        [ -z "$line" ] && continue
+        candidate=$(printf '%s\n' "$line" | awk -F',' '{print $1}' | awk '{print $1}')
+        candidate="${candidate%\"}"
+        candidate="${candidate#\"}"
+        [[ "$candidate" == "IP" || "$candidate" == *"地址"* ]] && continue
+        sb_cfy_is_edge_ip "$candidate" || continue
+        sb_cfy_ip_list+=("$candidate")
+        sb_cfy_isp_list+=("本地测速")
+    done < "$source_file"
+
+    if [ "${#sb_cfy_ip_list[@]}" -eq 0 ]; then
+        red "未从文件中解析到有效 IP。支持 CloudflareSpeedTest result.csv 或纯 IP 列表。"
+        return 1
+    fi
+
+    green "成功导入 ${#sb_cfy_ip_list[@]} 个本地测速 IP。"
+}
+
 sb_cfy_get_wetest_edges() {
     local url_v4="https://www.wetest.vip/page/cloudflare/address_v4.html"
     local url_v6="https://www.wetest.vip/page/cloudflare/address_v6.html"
-    local paired_data_file html table_rows ips isps pair source url type_desc
+    local category="${1:-all}" paired_data_file html table_rows ips isps pair source url type_desc row_ip row_isp
 
     paired_data_file=$(mktemp)
     sb_cfy_ip_list=()
@@ -2449,13 +2540,16 @@ sb_cfy_get_wetest_edges() {
 
     while IFS= read -r pair; do
         [ -n "$pair" ] || continue
-        sb_cfy_ip_list+=("$(echo "$pair" | awk '{print $1}')")
-        sb_cfy_isp_list+=("$(echo "$pair" | cut -d' ' -f2-)")
+        row_ip="$(echo "$pair" | awk '{print $1}')"
+        row_isp="$(echo "$pair" | cut -d' ' -f2-)"
+        sb_cfy_match_isp_category "$row_isp" "$category" || continue
+        sb_cfy_ip_list+=("$row_ip")
+        sb_cfy_isp_list+=("$row_isp")
     done < <(shuf "$paired_data_file")
 
     rm -f "$paired_data_file"
     if [ "${#sb_cfy_ip_list[@]}" -eq 0 ]; then
-        red "解析成功，但未找到任何有效的 IP 地址。"
+        red "解析成功，但当前线路筛选下没有有效 IP。"
         return 1
     fi
 
@@ -2470,7 +2564,7 @@ sb_cfy_emit_url() {
 
 sb_cfy_main() {
     local selected_index=0 selected_url selected_type choice
-    local base64_part original_json original_ps ip_source_choice use_optimized_ips=false
+    local base64_part original_json original_ps ip_source_choice ip_source_type="official" import_file
     local num_to_generate=0 current_ip isp_name generated random_ip_range ip_from_range new_ps
     local cf_ranges
 
@@ -2526,42 +2620,54 @@ sb_cfy_main() {
     yellow "请选择要使用的 IP 地址来源:"
     echo "  1) Cloudflare 官方 (手动优选)"
     echo "  2) 云优选"
+    echo "  3) 导入本地测速结果"
     while true; do
-        reading "请输入选项编号 (1-2): " ip_source_choice
+        reading "请输入选项编号 (1-3): " ip_source_choice
         case "$ip_source_choice" in
-            1) use_optimized_ips=false; break ;;
-            2) use_optimized_ips=true; break ;;
+            1) ip_source_type="official"; break ;;
+            2) ip_source_type="wetest"; break ;;
+            3) ip_source_type="import"; break ;;
             *) red "无效的输入，请重试。" ;;
         esac
     done
 
     : > "${SB_CFY_OUTPUT:-/tmp/sb-cfy-output.txt}"
-    if $use_optimized_ips; then
-        sb_cfy_get_wetest_edges || return 1
-        num_to_generate="${#sb_cfy_ip_list[@]}"
-    else
-        yellow "正在从 Cloudflare 官网获取 IPv4 地址列表..."
-        mapfile -t cf_ranges < <(curl -fsSL --connect-timeout 10 --max-time 30 https://www.cloudflare.com/ips-v4 2>/dev/null)
-        if [ "${#cf_ranges[@]}" -eq 0 ]; then
-            red "无法获取 Cloudflare 官方 IPv4 地址段。"
-            return 1
-        fi
-        while true; do
-            reading "请输入您想生成的 URL 数量: " num_to_generate
-            if [[ "$num_to_generate" =~ ^[0-9]+$ ]] && [ "$num_to_generate" -gt 0 ]; then
-                break
+    case "$ip_source_type" in
+        wetest)
+            SB_CFY_WETEST_CATEGORY="all"
+            sb_cfy_select_wetest_category
+            sb_cfy_get_wetest_edges "$SB_CFY_WETEST_CATEGORY" || return 1
+            num_to_generate=$(sb_cfy_select_generate_count "${#sb_cfy_ip_list[@]}" 20)
+            ;;
+        import)
+            reading "请输入本地测速结果文件路径 (result.csv 或纯 IP 列表): " import_file
+            sb_cfy_load_imported_edges "$import_file" || return 1
+            num_to_generate=$(sb_cfy_select_generate_count "${#sb_cfy_ip_list[@]}" 20)
+            ;;
+        *)
+            yellow "正在从 Cloudflare 官网获取 IPv4 地址列表..."
+            mapfile -t cf_ranges < <(curl -fsSL --connect-timeout 10 --max-time 30 https://www.cloudflare.com/ips-v4 2>/dev/null)
+            if [ "${#cf_ranges[@]}" -eq 0 ]; then
+                red "无法获取 Cloudflare 官方 IPv4 地址段。"
+                return 1
             fi
-            red "请输入一个有效的正整数。"
-        done
-    fi
+            num_to_generate=$(sb_cfy_select_generate_count "${#cf_ranges[@]}" 20)
+            ;;
+    esac
+
+    [ "$num_to_generate" -gt 0 ] 2>/dev/null || { red "没有可生成的节点。"; return 1; }
 
     echo "---"
     yellow "生成的新节点链接如下:"
-    if $use_optimized_ips; then
+    if [ "$ip_source_type" = "wetest" ] || [ "$ip_source_type" = "import" ]; then
         for ((i=0; i<num_to_generate; i++)); do
             current_ip="${sb_cfy_ip_list[$i]}"
             isp_name="${sb_cfy_isp_list[$i]}"
-            new_ps="${original_ps}-优选${isp_name}"
+            if [ "$ip_source_type" = "import" ]; then
+                new_ps="${original_ps}-本地测速$((i + 1))"
+            else
+                new_ps="${original_ps}-优选${isp_name}"
+            fi
             if [ "$selected_type" = "vless" ]; then
                 generated=$(sb_cfy_update_vless_url "$selected_url" "$current_ip" "$new_ps")
             else
