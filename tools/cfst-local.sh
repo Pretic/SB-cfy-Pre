@@ -14,7 +14,62 @@ need_cmd() {
     }
 }
 
+print_sha256() {
+    local file="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file"
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file"
+    else
+        echo "sha256 unavailable: install sha256sum or shasum to verify $file"
+    fi
+}
+
+install_cfst() {
+    local url="$1" asset="$2" extract_cmd="$3"
+    local tmp_dir extract_dir archive cfst_bin
+
+    tmp_dir="$(mktemp -d)"
+    CFST_TMP_DIR="$tmp_dir"
+    trap 'rm -rf "$CFST_TMP_DIR"' EXIT
+    extract_dir="${tmp_dir}/extract"
+    archive="${tmp_dir}/${asset}"
+    mkdir -p "$extract_dir"
+
+    echo "Downloading official CloudflareSpeedTest release:"
+    echo "  $url"
+    curl -fL --retry 3 --connect-timeout 10 --proto '=https' --tlsv1.2 -o "$archive" "$url"
+    print_sha256 "$archive"
+
+    case "$extract_cmd" in
+        tar) tar -xzf "$archive" -C "$extract_dir" ;;
+        unzip) unzip -o -q "$archive" -d "$extract_dir" ;;
+        *) echo "Unsupported extract command: $extract_cmd" >&2; rm -rf "$tmp_dir"; exit 1 ;;
+    esac
+
+    cfst_bin="$(find "$extract_dir" -type f -name cfst | head -n 1)"
+    if [ -z "$cfst_bin" ]; then
+        echo "cfst binary not found in downloaded archive." >&2
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
+    cp "$cfst_bin" ./cfst
+    chmod 0755 ./cfst
+    print_sha256 ./cfst
+    rm -rf "$tmp_dir"
+    CFST_TMP_DIR=""
+    trap - EXIT
+}
+
+if [ "${CFST_ALLOW_ROOT:-0}" != "1" ] && [ "$(id -u 2>/dev/null || echo 1)" = "0" ]; then
+    echo "Refusing to run as root. Run as a normal local user, or set CFST_ALLOW_ROOT=1 to override." >&2
+    exit 1
+fi
+
 need_cmd curl
+need_cmd find
+need_cmd mktemp
 
 os="$(uname -s | tr '[:upper:]' '[:lower:]')"
 arch_raw="$(uname -m)"
@@ -34,13 +89,11 @@ cd "$work_dir"
 if [ "$os" = "linux" ]; then
     need_cmd tar
     asset="cfst_linux_${arch}.tar.gz"
-    archive="$asset"
-    unpack() { tar -xzf "$archive"; }
+    extractor="tar"
 elif [ "$os" = "darwin" ]; then
     need_cmd unzip
     asset="cfst_darwin_${arch}.zip"
-    archive="$asset"
-    unpack() { unzip -o -q "$archive"; }
+    extractor="unzip"
 else
     echo "Unsupported OS for this script: $os" >&2
     echo "Windows users should run tools/cfst-local.ps1 instead." >&2
@@ -48,12 +101,9 @@ else
 fi
 
 if [ ! -x ./cfst ]; then
-    url="https://github.com/${repo}/releases/latest/download/${asset}"
-    echo "Downloading official CloudflareSpeedTest release:"
-    echo "  $url"
-    curl -fL --retry 3 --connect-timeout 10 -o "$archive" "$url"
-    unpack
-    chmod +x ./cfst
+    install_cfst "https://github.com/${repo}/releases/latest/download/${asset}" "$asset" "$extractor"
+else
+    print_sha256 ./cfst
 fi
 
 if [ "$#" -eq 0 ]; then

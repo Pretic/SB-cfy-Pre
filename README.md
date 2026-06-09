@@ -47,7 +47,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/Pretic/SB-cfy-Pre/main/sing-bo
 2. `云优选`：从 wetest 列表读取，可筛选电信、联通、移动或全部线路。
 3. `导入本地测速结果`：推荐用于追求质量。测速应在你实际使用代理的电脑和网络上运行，而不是在 VPS 上运行。
 
-本地测速辅助脚本只做三件事：从 [XIU2/CloudflareSpeedTest](https://github.com/XIU2/CloudflareSpeedTest) 官方 release 下载 `cfst` 到当前目录的 `cfst-local` 文件夹，运行测速，生成 `result.csv`。它不需要管理员权限，不使用 `sudo`，不改系统服务，不读取密钥。
+本地测速辅助脚本只做三件事：从 [XIU2/CloudflareSpeedTest](https://github.com/XIU2/CloudflareSpeedTest) 官方 release 下载 `cfst` 到当前目录的 `cfst-local` 文件夹，运行测速，生成 `result.csv`。它默认拒绝 root/管理员权限运行，不改系统服务，不读取密钥；下载包会先解压到临时目录，只复制 `cfst` 主程序，并输出 SHA256 便于核对。
 
 Linux/macOS：
 
@@ -72,13 +72,15 @@ powershell -ExecutionPolicy Bypass -File .\cfst-local.ps1
 bash cfst-local.sh -tll 40 -tl 180 -dn 30 -o result.csv
 ```
 
+如果你明确知道自己在做什么，Linux/macOS 可用 `CFST_ALLOW_ROOT=1 bash cfst-local.sh` 允许 root 运行；Windows 可先执行 `$env:CFST_ALLOW_ADMIN="1"` 再运行脚本。普通本地测速不建议这样做。
+
 测速完成后，把 `result.csv` 上传到 VPS：
 
 ```bash
 scp result.csv root@你的VPSIP:/root/result.csv
 ```
 
-然后在 VPS 上运行 `sb`，进入第 `11. Cloudflare优选`，选择 `3) 导入本地测速结果`，输入 `/root/result.csv`。
+然后在 VPS 上运行 `sb`，进入第 `11. Cloudflare优选`，选择 `3) 导入本地测速结果`，输入 `/root/result.csv`。导入时会去重，并默认最多读取前 `1000` 个有效 IP；如确实需要更多，可在运行脚本前设置 `SB_CFY_IMPORT_MAX`。
 
 
 # 1：vps一键命令，已集成到ssh工具箱中

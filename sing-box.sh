@@ -2476,21 +2476,57 @@ sb_cfy_select_generate_count() {
     done
 }
 
+sb_cfy_is_valid_ipv4() {
+    local ip="$1" octet
+    local -a octets
+    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+    IFS=. read -r -a octets <<< "$ip"
+    [ "${#octets[@]}" -eq 4 ] || return 1
+    for octet in "${octets[@]}"; do
+        [[ "$octet" =~ ^[0-9]+$ ]] || return 1
+        [ "$octet" -le 255 ] || return 1
+    done
+}
+
+sb_cfy_is_valid_ipv6() {
+    local ip="${1#[}" part non_empty=0 has_compression=0
+    local -a parts
+    ip="${ip%]}"
+
+    [[ "$ip" == *:* ]] || return 1
+    [[ "$ip" =~ ^[0-9A-Fa-f:]+$ ]] || return 1
+    [[ "$ip" != *:::* ]] || return 1
+    [ "${#ip}" -le 39 ] || return 1
+
+    [[ "$ip" == *::* ]] && has_compression=1
+    IFS=: read -r -a parts <<< "$ip"
+    [ "${#parts[@]}" -le 8 ] || return 1
+    if [ "$has_compression" -eq 0 ] && [ "${#parts[@]}" -ne 8 ]; then
+        return 1
+    fi
+    for part in "${parts[@]}"; do
+        [ -z "$part" ] && continue
+        [ "${#part}" -le 4 ] || return 1
+        non_empty=$((non_empty + 1))
+    done
+    [ "$non_empty" -gt 0 ]
+}
+
 sb_cfy_is_edge_ip() {
     local candidate="$1"
-    [[ "$candidate" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && return 0
-    [[ "$candidate" =~ ^\[?[0-9A-Fa-f:]+\]?$ ]] && [[ "$candidate" == *:* ]] && return 0
-    return 1
+    sb_cfy_is_valid_ipv4 "$candidate" || sb_cfy_is_valid_ipv6 "$candidate"
 }
 
 sb_cfy_load_imported_edges() {
-    local source_file="$1" line candidate
+    local source_file="$1" line candidate seen_edges="" imported_count=0 max_import="${SB_CFY_IMPORT_MAX:-1000}"
     sb_cfy_ip_list=()
     sb_cfy_isp_list=()
 
     [ -f "$source_file" ] || { red "文件不存在: ${source_file}"; return 1; }
+    [[ "$max_import" =~ ^[0-9]+$ ]] || max_import=1000
 
     while IFS= read -r line || [ -n "$line" ]; do
+        [ "$imported_count" -ge "$max_import" ] && break
         line="${line//$'\r'/}"
         [ -z "$line" ] && continue
         candidate=$(printf '%s\n' "$line" | awk -F',' '{print $1}' | awk '{print $1}')
@@ -2498,8 +2534,13 @@ sb_cfy_load_imported_edges() {
         candidate="${candidate#\"}"
         [[ "$candidate" == "IP" || "$candidate" == *"地址"* ]] && continue
         sb_cfy_is_edge_ip "$candidate" || continue
+        case " ${seen_edges} " in
+            *" ${candidate} "*) continue ;;
+        esac
+        seen_edges="${seen_edges} ${candidate}"
         sb_cfy_ip_list+=("$candidate")
         sb_cfy_isp_list+=("本地测速")
+        imported_count=$((imported_count + 1))
     done < "$source_file"
 
     if [ "${#sb_cfy_ip_list[@]}" -eq 0 ]; then
@@ -2542,6 +2583,7 @@ sb_cfy_get_wetest_edges() {
         [ -n "$pair" ] || continue
         row_ip="$(echo "$pair" | awk '{print $1}')"
         row_isp="$(echo "$pair" | cut -d' ' -f2-)"
+        sb_cfy_is_edge_ip "$row_ip" || continue
         sb_cfy_match_isp_category "$row_isp" "$category" || continue
         sb_cfy_ip_list+=("$row_ip")
         sb_cfy_isp_list+=("$row_isp")

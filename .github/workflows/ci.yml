@@ -10,7 +10,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Bash syntax check
-        run: bash -n sing-box.sh
+        run: |
+          bash -n sing-box.sh
+          bash -n tools/cfst-local.sh
+      - name: PowerShell helper syntax check
+        shell: pwsh
+        run: |
+          $errors = $null
+          [void][System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw "tools/cfst-local.ps1"), [ref]$errors)
+          if ($errors.Count -gt 0) {
+            $errors | Format-List
+            exit 1
+          }
       - name: Python smoke tests
         run: python3 tests/test_minimal_merge.py
       - name: Check install entrypoint

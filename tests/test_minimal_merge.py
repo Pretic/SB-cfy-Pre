@@ -12,6 +12,13 @@ def script_text() -> str:
     return SCRIPT.read_text(encoding="utf-8")
 
 
+def text_at(relative_path: str) -> str:
+    path = ROOT / relative_path
+    if not path.exists():
+        raise AssertionError(f"{relative_path} should exist")
+    return path.read_text(encoding="utf-8")
+
+
 class MinimalMergeTests(unittest.TestCase):
     def test_cloudflare_optimizer_is_embedded_and_menu_accessible(self):
         text = script_text()
@@ -55,6 +62,41 @@ class MinimalMergeTests(unittest.TestCase):
         self.assertTrue((ROOT / "tools" / "cfst-local.sh").exists())
         self.assertTrue((ROOT / "tools" / "cfst-local.ps1").exists())
         self.assertTrue((ROOT / ".github" / "workflows" / "ci.yml").exists())
+
+    def test_local_speedtest_helpers_are_safe_by_default(self):
+        shell_helper = text_at("tools/cfst-local.sh")
+        ps_helper = text_at("tools/cfst-local.ps1")
+
+        self.assertIn("CFST_ALLOW_ROOT", shell_helper)
+        self.assertIn("id -u", shell_helper)
+        self.assertIn("mktemp -d", shell_helper)
+        self.assertIn("CFST_TMP_DIR", shell_helper)
+        self.assertIn("trap 'rm -rf \"$CFST_TMP_DIR\"' EXIT", shell_helper)
+        self.assertIn("find \"$extract_dir\" -type f -name cfst", shell_helper)
+        self.assertIn("sha256", shell_helper.lower())
+        self.assertNotIn("sudo", shell_helper)
+
+        self.assertIn("CFST_ALLOW_ADMIN", ps_helper)
+        self.assertIn("WindowsPrincipal", ps_helper)
+        self.assertIn("NewGuid", ps_helper)
+        self.assertIn("Expand-Archive", ps_helper)
+        self.assertIn("Get-FileHash", ps_helper)
+
+    def test_ci_checks_helper_script_syntax(self):
+        ci = text_at(".github/workflows/ci.yml")
+
+        self.assertIn("bash -n sing-box.sh", ci)
+        self.assertIn("bash -n tools/cfst-local.sh", ci)
+        self.assertIn("PSParser", ci)
+
+    def test_imported_edges_are_strictly_validated(self):
+        text = script_text()
+
+        self.assertIn("sb_cfy_is_valid_ipv4()", text)
+        self.assertIn("sb_cfy_is_valid_ipv6()", text)
+        self.assertIn('sb_cfy_is_edge_ip "$row_ip" || continue', text)
+        self.assertIn("SB_CFY_IMPORT_MAX", text)
+        self.assertIn("seen_edges", text)
 
 
 if __name__ == "__main__":
